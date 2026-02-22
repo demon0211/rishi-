@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+backend/venv/
+.env
+
+# Node.js
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+.eslintcache
+
+# Logs and debug
+*.log
+debug_output.txt
+debug_docx_output*.txt
+
+# OS
+.DS_Store
+Thumbs.db
