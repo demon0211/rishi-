@@ -451,50 +451,52 @@ class NLPProcessor:
                 # Normalize characters early to avoid regex issues
                 body = self._normalize_text(body)
                 
+                # Normalize characters early to avoid regex issues
+                body = self._normalize_text(body)
+                
                 # ── Extract Technical Content from Body ──
                 figures = []
                 tables = []
                 equations = []
 
                 # 1. Figures: ![caption](path)
-                image_placeholders = re.findall(r'!\[(.*?)\]\((.*?)\)', body)
-                for caption, path in image_placeholders:
+                # We replace with unique placeholders [[FIG:n]] to keep position
+                def fig_repl(m):
+                    cap, path = m.groups()
                     final_path = path
                     if path.startswith('IMG:'):
                         img_name = path[4:]
                         final_path = self.image_map.get(img_name, path)
-                    elif path.startswith('DOCX_IMG_'):
-                        # Legacy fallback
-                        try:
-                            idx = int(path.split('_')[-1]) - 1
-                            if hasattr(self, 'extracted_images') and 0 <= idx < len(self.extracted_images):
-                                final_path = self.extracted_images[idx]
-                        except:
-                            pass
-                    figures.append({'caption': caption, 'path': final_path})
-                # Remove figure markers from body - use space padding to avoid merging words
-                body = re.sub(r'!\[.*?\]\(.*?\)', ' ', body).strip()
+                    figures.append({'caption': cap, 'path': final_path})
+                    return f" [[FIG:{len(figures)-1}]] "
+
+                body = re.sub(r'!\[(.*?)\]\((.*?)\)', fig_repl, body)
 
                 # 2. Tables: [TABLE_START] ... [TABLE_END]
-                table_blocks = re.findall(r'\[TABLE_START\](.*?)\[TABLE_END\]', body, re.DOTALL)
-                for block in table_blocks:
+                def tbl_repl(m):
+                    block = m.group(1)
                     rows = [r.split(' | ') for r in block.strip().split('\n') if r.strip()]
                     if rows:
                         tables.append({'caption': f"Table {len(tables)+1}", 'data': rows})
-                # Remove table blocks from body
-                body = re.sub(r'\[TABLE_START\].*?\[TABLE_END\]', ' ', body, flags=re.DOTALL).strip()
+                        return f" [[TBL:{len(tables)-1}]] "
+                    return ""
+
+                body = re.sub(r'\[TABLE_START\](.*?)\[TABLE_END\]', tbl_repl, body, flags=re.DOTALL)
 
                 # 3. Equations: $$ ... $$
-                math_blocks = re.findall(r'\$\$(.*?)\$\$', body, re.DOTALL)
-                for eq_text in math_blocks:
-                    equations.append({'text': eq_text.strip(), 'num': len(equations)+1})
-                # Remove math blocks from body
-                body = re.sub(r'\$\$.*?\$\$', ' ', body, flags=re.DOTALL).strip()
+                def eq_repl(m):
+                    eq_text = m.group(1).strip()
+                    if eq_text:
+                        equations.append({'text': eq_text, 'num': len(equations)+1})
+                        return f" [[EQ:{len(equations)-1}]] "
+                    return ""
+
+                body = re.sub(r'\$\$(.*?)\$\$', eq_repl, body, flags=re.DOTALL)
 
                 normalized = self._normalize_section_heading(heading_raw)
                 doc.sections.append(SectionData(
                     heading=normalized, 
-                    body=body,
+                    body=body.strip(),
                     figures=figures,
                     tables=tables,
                     equations=equations

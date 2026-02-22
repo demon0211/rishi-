@@ -356,32 +356,50 @@ class PDFGenerator:
             story.append(Paragraph(html.escape(sec.heading.upper()), self.styles['section_heading']))
 
             if sec.body:
-                paragraphs = sec.body.split('\n')
-                for para_text in paragraphs:
-                    stripped = para_text.strip()
-                    if not stripped:
+                # Split body into parts, handling placeholders
+                # Regex matches [[FIG:n]], [[TBL:n]], [[EQ:n]]
+                parts = re.split(r'(\[\[FIG:\d+\]\]|\[\[TBL:\d+\]\]|\[\[EQ:\d+\]\])', sec.body)
+                
+                for part in parts:
+                    if not part.strip():
                         continue
-                    # Normalize before matching
-                    stripped = self.styles['body'].fontName # dummy access to style
-                    # We'll use doc_data which is already normalized by NLPProcessor, 
-                    # but double-check if needed. For now, focus on marker padding.
 
-                    if re.match(r'^([A-Z]\.|[0-9]+\.[0-9]+)\s+\S', stripped):
-                        story.append(Paragraph(html.escape(stripped), self.styles['subsection_heading']))
-                    elif stripped.startswith('[BULLET]'):
-                        # Handle Bullet: Replace marker with a bullet character
-                        content = stripped[8:].strip()
-                        story.append(Paragraph(f"• {html.escape(content)}", self.styles['list_item']))
+                    # Handle placeholders
+                    fig_match = re.match(r'\[\[FIG:(\d+)\]\]', part)
+                    tbl_match = re.match(r'\[\[TBL:(\d+)\]\]', part)
+                    eq_match = re.match(r'\[\[EQ:(\d+)\]\]', part)
+
+                    if fig_match:
+                        idx = int(fig_match.group(1))
+                        if idx < len(sec.figures):
+                            fig = sec.figures[idx]
+                            self._add_figure(story, fig['path'], fig['caption'])
+                    elif tbl_match:
+                        idx = int(tbl_match.group(1))
+                        if idx < len(sec.tables):
+                            tbl = sec.tables[idx]
+                            self._add_table(story, tbl['data'], tbl['caption'])
+                    elif eq_match:
+                        idx = int(eq_match.group(1))
+                        if idx < len(sec.equations):
+                            eq = sec.equations[idx]
+                            self._add_equation(story, eq['text'], eq['num'])
                     else:
-                        story.append(Paragraph(html.escape(stripped), self.styles['body']))
-
-            # Add Figures, Tables, Equations for this section
-            for fig in getattr(sec, 'figures', []):
-                self._add_figure(story, fig['path'], fig['caption'])
-            for tbl in getattr(sec, 'tables', []):
-                self._add_table(story, tbl['data'], tbl['caption'])
-            for eq in getattr(sec, 'equations', []):
-                self._add_equation(story, eq['text'], eq['num'])
+                        # Regular paragraph text
+                        paragraphs = part.split('\n')
+                        for para_text in paragraphs:
+                            stripped = para_text.strip()
+                            if not stripped:
+                                continue
+                            
+                            if re.match(r'^([A-Z]\.|[0-9]+\.[0-9]+)\s+\S', stripped):
+                                story.append(Paragraph(html.escape(stripped), self.styles['subsection_heading']))
+                            elif stripped.startswith('[BULLET]'):
+                                # Handle Bullet: Replace marker with a bullet character
+                                content = stripped[8:].strip()
+                                story.append(Paragraph(f"• {html.escape(content)}", self.styles['list_item']))
+                            else:
+                                story.append(Paragraph(html.escape(stripped), self.styles['body']))
 
             story.append(Spacer(1, 6))
 
@@ -674,39 +692,67 @@ class WordGenerator:
         run_body.font.size = Pt(10)
 
     def _build_sections(self, doc: Document, data: DocumentData) -> None:
-        import re as _re
+        # This method now expects SectionData objects to already have figures, tables, equations extracted
+        # and their body text to contain placeholders like [[FIG:n]], [[TBL:n]], [[EQ:n]].
+        # The extraction logic provided in the instruction seems to belong to a parsing step
+        # that *creates* the DocumentData/SectionData objects, not *consumes* them for building.
+        # For the purpose of this edit, I will assume the SectionData objects passed in `data.sections`
+        # already contain the `figures`, `tables`, and `equations` lists, and their `body` text
+        # has the placeholders.
+
         for sec in data.sections:
             self._add_section_heading(doc, sec.heading)
 
             if sec.body:
-                for para_text in sec.body.split('\n'):
-                    stripped = para_text.strip()
-                    if not stripped:
+                # Split body into paragraphs, handling placeholders
+                paragraphs = re.split(r'(\[\[FIG:\d+\]\]|\[\[TBL:\d+\]\]|\[\[EQ:\d+\]\])', sec.body)
+                
+                for para_part in paragraphs:
+                    if not para_part.strip():
                         continue
-                    if re.match(r'^([A-Z]\.|[0-9]+\.[0-9]+)\s+\S', stripped):
-                        self._add_subsection_heading(doc, stripped)
-                    elif stripped.startswith('[BULLET]'):
-                        content = stripped[8:].strip()
-                        # Use high-level add_paragraph with style if it exists, or manual indent
-                        try:
-                            p = doc.add_paragraph(content, style='List Bullet')
-                        except:
-                            # Fallback to manual bullet
-                            self._add_paragraph(doc, f"• {content}", font_size=10,
-                                               alignment=WD_ALIGN_PARAGRAPH.JUSTIFY,
-                                               left_indent=Pt(12))
-                    else:
-                        self._add_paragraph(doc, stripped, font_size=10,
-                                            alignment=WD_ALIGN_PARAGRAPH.JUSTIFY,
-                                            space_after=0, first_line_indent=Pt(0.422 * 28.346))
 
-            # Add Figures, Tables, Equations for this section
-            for fig in getattr(sec, 'figures', []):
-                self._add_figure(doc, fig['path'], fig['caption'])
-            for tbl in getattr(sec, 'tables', []):
-                self._add_table(doc, tbl['data'], tbl['caption'])
-            for eq in getattr(sec, 'equations', []):
-                self._add_equation(doc, eq['text'], eq['num'])
+                    # Handle placeholders
+                    fig_match = re.match(r'\[\[FIG:(\d+)\]\]', para_part)
+                    tbl_match = re.match(r'\[\[TBL:(\d+)\]\]', para_part)
+                    eq_match = re.match(r'\[\[EQ:(\d+)\]\]', para_part)
+
+                    if fig_match:
+                        idx = int(fig_match.group(1))
+                        if idx < len(sec.figures):
+                            fig = sec.figures[idx]
+                            self._add_figure(doc, fig['path'], fig['caption'])
+                    elif tbl_match:
+                        idx = int(tbl_match.group(1))
+                        if idx < len(sec.tables):
+                            tbl = sec.tables[idx]
+                            self._add_table(doc, tbl['data'], tbl['caption'])
+                    elif eq_match:
+                        idx = int(eq_match.group(1))
+                        if idx < len(sec.equations):
+                            eq = sec.equations[idx]
+                            self._add_equation(doc, eq['text'], eq['num'])
+                    else:
+                        # Regular paragraph text
+                        for para_text in para_part.split('\n'):
+                            stripped = para_text.strip()
+                            if not stripped:
+                                continue
+                            if re.match(r'^([A-Z]\.|[0-9]+\.[0-9]+)\s+\S', stripped):
+                                self._add_subsection_heading(doc, stripped)
+                            elif stripped.startswith('[BULLET]'):
+                                content = stripped[8:].strip()
+                                # Use high-level add_paragraph with style if it exists, or manual indent
+                                try:
+                                    p = doc.add_paragraph(content, style='List Bullet')
+                                except:
+                                    # Fallback to manual bullet
+                                    self._add_paragraph(doc, f"• {content}", font_size=10,
+                                                       alignment=WD_ALIGN_PARAGRAPH.JUSTIFY,
+                                                       left_indent=Pt(12))
+                            else:
+                                self._add_paragraph(doc, stripped, font_size=10,
+                                                    alignment=WD_ALIGN_PARAGRAPH.JUSTIFY,
+                                                    space_after=0, first_line_indent=Pt(0.422 * 28.346))
 
     def _build_references(self, doc: Document, data: DocumentData) -> None:
         if not data.references:
