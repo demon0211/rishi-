@@ -362,15 +362,18 @@ class NLPProcessor:
         while i < len(lines):
             line = lines[i].strip()
             # Stop at Abstract or first Roman heading
-            if re.match(r'(?i)^abstract', line) or self.SECTION_PATTERN.match(line):
+            if re.match(r'(?i)^(abstract|keywords?|index\s+terms)', line) or self.SECTION_PATTERN.match(line):
                 break
-            if line and not self.EMAIL_PATTERN.search(line):
-                # Skip author-like lines (contain @, dept keywords)
-                if not any(kw in line.lower() for kw in ['department', 'university', 'college', 'institute', 'india', 'chennai', 'isbn']):
-                    title_lines.append(line)
+            
+            # IEEE authors/affiliations often contain these keywords; stop title if found
+            if any(kw in line.lower() for kw in ['department', 'dept.', 'university', 'college', 'institute', 'india', 'chennai', 'email']):
+                break
+
+            if line:
+                title_lines.append(line)
             i += 1
 
-        doc.title = ' '.join(title_lines[:3]).strip()  # Max 3 lines for title
+        doc.title = ' '.join(title_lines[:5]).strip()  # Allow up to 5 lines for long titles
 
         # ── Author block: lines between title end and Abstract ──
         author_block_text = []
@@ -530,7 +533,23 @@ class NLPProcessor:
             '\u00a0': ' ',   # Non-breaking space
             '\ufb01': 'fi',  # Ligature fi
             '\ufb02': 'fl',  # Ligature fl
+            '\ufb03': 'ffi', # Ligature ffi
+            '\ufb04': 'ffl', # Ligature ffl
             '\u00f9': 'u',   # u with accent (often used in 'specifically')
+            '\u2192': '->',  # Right arrow
+            '\u2264': '<=',  # Less than or equal
+            '\u2265': '>=',  # Greater than or equal
+            '\u00b1': '+/-', # Plus-minus
+            '\u221e': 'infinity',
+            '\u2248': '~',   # Approximately
+            '\u22c5': '*',   # Dot operator
+            '\u00d7': 'x',   # Multiplication sign
+            '\u2022': '*',   # Bullet
+            '\u2713': 'check', 
+            '\u2113': 'l',   # Cursive l
+            '\u03bc': 'micro', # Greek mu
+            '\u2206': 'delta', # Delta
+            '\u03c0': 'pi',    # Pi
         }
         
         for char, replacement in replacements.items():
@@ -538,6 +557,10 @@ class NLPProcessor:
             
         # Also handle any byte-order markers or zero-width spaces
         text = text.replace('\ufeff', '').replace('\u200b', '')
+        
+        # Remove other extreme non-ascii that might cause reportlab to crash
+        # but keep common western accents if possible (though Times-Roman might struggle)
+        # For now, let's just stick to the mapping.
         
         return text
 

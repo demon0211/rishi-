@@ -11,6 +11,7 @@ DocumentBuilder pattern:
 import os
 import textwrap
 import html
+import re
 from typing import List
 
 # ── ReportLab ─────────────────────────────────────────────────────────────
@@ -360,6 +361,11 @@ class PDFGenerator:
                     stripped = para_text.strip()
                     if not stripped:
                         continue
+                    # Normalize before matching
+                    stripped = self.styles['body'].fontName # dummy access to style
+                    # We'll use doc_data which is already normalized by NLPProcessor, 
+                    # but double-check if needed. For now, focus on marker padding.
+
                     if re.match(r'^([A-Z]\.|[0-9]+\.[0-9]+)\s+\S', stripped):
                         story.append(Paragraph(html.escape(stripped), self.styles['subsection_heading']))
                     elif stripped.startswith('[BULLET]'):
@@ -677,7 +683,7 @@ class WordGenerator:
                     stripped = para_text.strip()
                     if not stripped:
                         continue
-                    if _re.match(r'^([A-Z]\.|[0-9]+\.[0-9]+)\s+\S', stripped):
+                    if re.match(r'^([A-Z]\.|[0-9]+\.[0-9]+)\s+\S', stripped):
                         self._add_subsection_heading(doc, stripped)
                     elif stripped.startswith('[BULLET]'):
                         content = stripped[8:].strip()
