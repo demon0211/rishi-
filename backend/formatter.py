@@ -942,12 +942,13 @@ class WordGenerator:
                         content = stripped[8:].strip()
                         try:
                             p = doc.add_paragraph(content, style='List Bullet')
+                            p.paragraph_format.space_after = Pt(12) # Add spacing
                         except:
                             self._add_paragraph(doc, f"• {content}", font_size=font_size,
-                                               bold=bold, italic=italic)
+                                               bold=bold, italic=italic, space_after=12)
                     else:
                         p = self._add_paragraph(doc, stripped, font_size=font_size, 
-                                            bold=bold, italic=italic)
+                                            bold=bold, italic=italic, space_after=12)
 
     def _build_references(self, doc: Document, data: DocumentData) -> None:
         if not data.references:
