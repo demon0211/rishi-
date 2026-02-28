@@ -540,8 +540,19 @@ class PDFGenerator:
     def _add_table(self, story: list, table_data: list, caption: str):
         from reportlab.platypus import Table, TableStyle
         story.append(Paragraph(html.escape(caption), self.styles['table_caption']))
+        
+        if not table_data:
+            return
+            
+        # Ensure all rows have the same number of columns
+        max_cols = max(len(row) for row in table_data)
+        padded_data = []
+        for row in table_data:
+            pad = [''] * (max_cols - len(row))
+            padded_data.append(row + pad)
+            
         # Escape table cells
-        esc_data = [[html.escape(str(cell)) for cell in row] for row in table_data]
+        esc_data = [[html.escape(str(cell)) for cell in row] for row in padded_data]
         tbl = Table(esc_data)
         tbl.setStyle(TableStyle([
             ('FONT', (0, 0), (-1, 0), 'Times-Bold'),
@@ -743,7 +754,10 @@ class WordGenerator:
         doc.add_paragraph().paragraph_format.space_after = Pt(12)
 
         num_authors = len(data.authors)
-        rows_needed = (num_authors + 2) // 3
+        import math
+        rows_needed = math.ceil(num_authors / 3)
+        if rows_needed == 0:
+            rows_needed = 1
         table = doc.add_table(rows=rows_needed, cols=3)
         
         from docx.oxml.shared import OxmlElement
@@ -975,6 +989,9 @@ class WordGenerator:
         run_cap.font.small_caps = True
 
     def _add_table(self, doc: Document, table_data: list, caption: str):
+        if not table_data:
+            return
+            
         cap = doc.add_paragraph()
         cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
         cap.paragraph_format.space_before = Pt(6)
@@ -984,11 +1001,14 @@ class WordGenerator:
         run_cap.font.size = Pt(10)
         run_cap.font.small_caps = True
 
-        table = doc.add_table(rows=len(table_data), cols=len(table_data[0]))
+        max_cols = max(len(row) for row in table_data)
+        table = doc.add_table(rows=len(table_data), cols=max_cols)
         table.style = 'Table Grid'
+        
         for i, row in enumerate(table_data):
-            for j, val in enumerate(row):
-                table.cell(i, j).text = str(val)
+            for j in range(max_cols):
+                val = str(row[j]) if j < len(row) else ''
+                table.cell(i, j).text = val
 
     def _add_equation(self, doc: Document, eq_text: str, num: int):
         p = doc.add_paragraph()

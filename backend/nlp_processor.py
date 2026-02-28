@@ -46,9 +46,13 @@ class DocumentData:
 
 
 class NLPProcessor:
-    # Regex for standard IEEE Roman numeral section headings
+    # Regex for standard IEEE Roman numeral section headings OR standard academic headings 
+    # optionally prefixed by [BULLET] or plain text.
     SECTION_PATTERN = re.compile(
-        r'^\s*((?:I{1,3}V?|VI{0,3}|VII|VIII|IX|X|\d+)\.\s+[A-Z][A-Z\s,]+|REFERENCES|BIBLIOGRAPHY)', 
+        r'^\s*(?:\[BULLET\]\s*)?(?:(?:I{1,3}V?|VI{0,3}|VII|VIII|IX|X|\d+)\.\s+)?'
+        r'(INTRODUCTION|LITERATURE REVIEW|SYSTEM ARCHITECTURE|METHODOLOGY|PROPOSED SYSTEM|'
+        r'HARDWARE DESIGN|SOFTWARE DESIGN|RESULTS|DISCUSSION|CONCLUSION|FUTURE SCOPE|'
+        r'ACKNOWLEDGMENTS?|REFERENCES|BIBLIOGRAPHY|SMART GLOVE DESIGN|SENSORS AND EMBEDDED PROCESSING)\b', 
         re.MULTILINE | re.IGNORECASE
     )
 
@@ -426,18 +430,23 @@ class NLPProcessor:
             doc.sections.insert(0, new_sec)
 
         # ── Keywords ──
-        if i < len(lines) and re.match(r'(?i)^(keywords?|index\s+terms)', lines[i].strip()):
+        if i < len(lines) and re.match(r'(?i)^(?:\[BULLET\]\s*)?(keywords?|index\s+terms)', lines[i].strip()):
             kw_line = lines[i].strip()
             # Remove leading "Keywords:" label
-            kw_content = re.sub(r'(?i)^(keywords?|index\s+terms)\s*[:\-—]?\s*', '', kw_line)
+            kw_content = re.sub(r'(?i)^(?:\[BULLET\]\s*)?(keywords?|index\s+terms)\s*[:\-—]?\s*', '', kw_line)
             i += 1
             # Collect continuation lines (until next section)
             while i < len(lines):
                 l = lines[i].strip()
-                if self.SECTION_PATTERN.match(l) or not l:
+                # Break if we hit a new section, an empty line, or a new bullet that looks like a heading
+                if self.SECTION_PATTERN.search(l) or not l or (l.startswith('[BULLET]') and len(l.split()) < 10):
                     break
                 kw_content += ' ' + l
                 i += 1
+            
+            # Additional cleanup to ensure keywords don't accidentally slurp up "INTRODUCTION" if regex misses it
+            kw_content = re.sub(r'(?i)\[BULLET\]\s*(INTRODUCTION|LITERATURE REVIEW).*$', '', kw_content).strip()
+            
             doc.keywords = [k.strip().rstrip('.') for k in re.split(r'[,;]', kw_content) if k.strip()]
 
         # ── Sections ──
@@ -461,10 +470,13 @@ class NLPProcessor:
         # ── Handle text BEFORE the first detected section ──
         prefix_text = text[:matches[0].start()].strip()
         if prefix_text:
+            # If prefix text is caught, it might be abstract/keywords residue. We append it as Content.
             doc.sections.append(SectionData(heading="Content", body=prefix_text))
 
         for idx, match in enumerate(matches):
-            heading_raw = match.group(0).strip()
+            # Extract just the matched heading text using subgroup 1
+            heading_raw = match.group(1).strip()
+            # Advance start past the end of the entire match (which includes [BULLET], numbers, matched word)
             start = match.end()
             end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
             body = text[start:end].strip()
@@ -477,7 +489,6 @@ class NLPProcessor:
                 new_sec = SectionData(heading=heading_raw)
                 self._extract_media(body, new_sec)
                 
-                heading_upper = heading_raw.upper()
                 new_sec.heading = self._normalize_section_heading(heading_raw)
                 doc.sections.append(new_sec)
 
@@ -611,6 +622,9 @@ class NLPProcessor:
         # DEFAULT IEEE STYLE
         # Clean block of multiple newlines to standardize before chunking
         
+        # 0. Clean Table placeholders that break Author Blocks (like Hemaa shri G | Divya)
+        block = block.replace('[TABLE_START]', '\n').replace('[TABLE_END]', '\n').replace('|', '\n')
+
         # 1. Clean up default placeholder templates (line 1:, etc.) completely across the block
         cleaned_block = re.sub(r'(?i)line\s*\d+\s*:\s*(?:\d*(?:st|nd|rd|th)\s*)?', '', block)
         
