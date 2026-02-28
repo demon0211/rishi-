@@ -90,7 +90,43 @@ def process_document():
         print(f"[app] Image extraction warning: {e}")
 
     # 3. Parse text into structured DocumentData
-    doc_data = nlp_processor.process_text(raw_text, images=images)
+    import json
+    doc_data = None
+    try:
+        # Check if the user uploaded a JSON string instead of a raw text/docx file
+        parsed_json = json.loads(raw_text)
+        if isinstance(parsed_json, dict) and 'title' in parsed_json and 'authors' in parsed_json:
+            # Manually build DocumentData
+            from nlp_processor import DocumentData, AuthorInfo
+            doc_data = DocumentData(title=parsed_json.get('title', ''))
+            
+            for a_json in parsed_json.get('authors', []):
+                author = AuthorInfo(
+                    name=a_json.get('name', ''),
+                    email=a_json.get('email', ''),
+                    institution=a_json.get('institution', ''),
+                    department=a_json.get('department', ''),
+                    role=a_json.get('role', a_json.get('designation', '')), # map designation to role
+                    address=a_json.get('address', ''),
+                    pincode=a_json.get('pincode', ''),
+                    university=a_json.get('university', '')
+                )
+                doc_data.authors.append(author)
+                
+            # If the user also included sections we could parse them here
+            sections = parsed_json.get('sections', [])
+            for s in sections:
+                from nlp_processor import SectionData
+                s_obj = SectionData(
+                    heading=s.get('heading', ''),
+                    body=s.get('body', '')
+                )
+                doc_data.sections.append(s_obj)
+    except Exception:
+        pass
+        
+    if doc_data is None:
+        doc_data = nlp_processor.process_text(raw_text, images=images)
 
     # 4. Mandatory Section Post-processing (Springer Only)
     if template == 'springer':
