@@ -41,14 +41,19 @@ function UploadArea({ onFileSelect, selectedFile }) {
 
             {selectedFile ? (
                 <div>
-                    <p><strong>Selected File:</strong></p>
-                    <p>{selectedFile.name}</p>
-                    <p className="text-sm text-gray-500">Click to change</p>
+                    <svg className="upload-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p style={{ fontWeight: 600, fontSize: '1.05rem', color: 'var(--primary-color)' }}>{selectedFile.name}</p>
+                    <p className="text-muted">Click to change file</p>
                 </div>
             ) : (
                 <div>
+                    <svg className="upload-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                    </svg>
                     <p><strong>Click to Upload</strong> or Drag & Drop</p>
-                    <p>Supported formats: <span style={{ color: '#ef4444' }}>PDF, Word (.docx)</span></p>
+                    <p className="text-muted">Supported formats: <span style={{ color: 'var(--primary-color)' }}>PDF, Word (.docx)</span></p>
                 </div>
             )}
         </div>

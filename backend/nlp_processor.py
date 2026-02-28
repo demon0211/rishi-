@@ -12,10 +12,18 @@ from docx.text.paragraph import Paragraph
 @dataclass
 class AuthorInfo:
     name: str = ""
+    role: str = ""
     department: str = ""
     institution: str = ""
-    location: str = ""
+    university: str = ""
+    address: str = ""
+    pincode: str = ""
     email: str = ""
+    location: str = ""
+    # Springer/Metadata support
+    aff_ids: List[int] = field(default_factory=list)
+    is_corresponding: bool = False
+    equal_contrib: bool = False
 
 
 @dataclass
@@ -31,7 +39,7 @@ class SectionData:
 class DocumentData:
     title: str = ""
     authors: List[AuthorInfo] = field(default_factory=list)
-    abstract: str = ""
+    affiliations: Dict[int, str] = field(default_factory=dict) # {1: "Dept, Org..."}
     keywords: List[str] = field(default_factory=list)
     sections: List[SectionData] = field(default_factory=list)
     references: List[str] = field(default_factory=list)
@@ -53,6 +61,10 @@ class NLPProcessor:
     EMAIL_PATTERN = re.compile(
         r'[\w.\-+]+@[\w.\-]+\.[a-zA-Z]{2,}'
     )
+
+    def __init__(self):
+        self.last_parsed_affiliations = {}
+        self.image_map = {}
 
     def extract_text_from_file(self, file_path: str) -> str:
         """Extracts raw text from PDF, DOCX, TXT, or MD."""
@@ -89,16 +101,15 @@ class NLPProcessor:
                         
                         if text:
                             content.append(text)
-                        else:
-                            content.append("")
+                        
                     elif element.tag.endswith('tbl'):
                         table = Table(element, doc)
-                        content.append("[TABLE_START]")
+                        content.append("\n[TABLE_START]")
                         for row in table.rows:
                             row_text = [cell.text.strip() for cell in row.cells]
                             content.append(" | ".join(row_text))
-                        content.append("[TABLE_END]")
-                return "\n\n".join(content)
+                        content.append("[TABLE_END]\n")
+                return "\n".join(content)
             elif ext in ['.txt', '.md']:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     return f.read()
@@ -146,6 +157,8 @@ class NLPProcessor:
         text = self._normalize_text(text)
         text = text.replace('\r\n', '\n').replace('\r', '\n')
         text = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
+        # Pre-clean any docx placeholders that leak into multiple lines
+        text = re.sub(r'(?i)line\s*\d+\s*:\s*(?:\d*(?:st|nd|rd|th)\s*)?', '', text)
 
         doc = DocumentData()
         # Build lookup dict for images: {filename: full_path}
@@ -168,7 +181,11 @@ class NLPProcessor:
         else:
             self._parse_plain_ieee(text, doc)
 
-        if not doc.sections and not doc.abstract:
+        # Springer/Affiliation mapping
+        if self.last_parsed_affiliations:
+            doc.affiliations = self.last_parsed_affiliations
+
+        if not doc.sections:
             doc.sections.append(SectionData(heading="Content", body=text.strip()))
 
         return doc
@@ -233,16 +250,16 @@ class NLPProcessor:
             heading_upper = current_heading.upper()
 
             if 'ABSTRACT' in heading_upper:
-                # Detect inline Keywords within Abstract body (e.g. **Keywords:** ...)
-                if '**KEYWORDS:**' in body.upper() or 'KEYWORDS:' in body.upper():
-                    # Use a more flexible regex for keywords
-                    kw_match = re.search(r'(?i)\*\*Keywords:\*\*\s*(.*)|(?i)Keywords:\s*(.*)', body)
+                new_sec = SectionData(heading="Abstract")
+                self._extract_media(body, new_sec)
+                # Detect inline Keywords within Abstract body
+                if '**KEYWORDS:**' in new_sec.body.upper() or 'KEYWORDS:' in new_sec.body.upper():
+                    kw_match = re.search(r'(?i)\*\*Keywords:\*\*\s*(.*)|(?i)Keywords:\s*(.*)', new_sec.body)
                     if kw_match:
                         kw_text = (kw_match.group(1) or kw_match.group(2)).strip()
                         doc.keywords = [k.strip().rstrip('.') for k in re.split(r'[,;]', kw_text) if k.strip()]
-                        # Remove keywords from abstract body
-                        body = body[:kw_match.start()].strip()
-                doc.abstract = body
+                        new_sec.body = new_sec.body[:kw_match.start()].strip()
+                doc.sections.insert(0, new_sec)
             elif 'KEYWORD' in heading_upper:
                 kw_text = body.replace('**', '').strip()
                 doc.keywords = [k.strip().rstrip('.') for k in re.split(r'[,;]', kw_text) if k.strip()]
@@ -365,8 +382,12 @@ class NLPProcessor:
             if re.match(r'(?i)^(abstract|keywords?|index\s+terms)', line) or self.SECTION_PATTERN.match(line):
                 break
             
-            # IEEE authors/affiliations often contain these keywords; stop title if found
-            if any(kw in line.lower() for kw in ['department', 'dept.', 'university', 'college', 'institute', 'india', 'chennai', 'email']):
+            # IEEE/Springer authors/affiliations stop title if found
+            if any(kw in line.lower() for kw in ['department', 'dept.', 'university', 'college', 'institute', 'india', 'chennai', 'email', 'e-mail']):
+                break
+            
+            # Stop if line looks like Springer authors (Numbers/symbols after names)
+            if re.search(r'[A-Z][a-z]+.*?\d+[*†]?', line):
                 break
 
             if line:
@@ -397,7 +418,12 @@ class NLPProcessor:
                     break
                 abstract_lines.append(line)
                 i += 1
-        doc.abstract = ' '.join(l for l in abstract_lines if l).strip()
+        
+        abstract_raw = ' '.join(l for l in abstract_lines if l).strip()
+        if abstract_raw:
+            new_sec = SectionData(heading="Abstract")
+            self._extract_media(abstract_raw, new_sec)
+            doc.sections.insert(0, new_sec)
 
         # ── Keywords ──
         if i < len(lines) and re.match(r'(?i)^(keywords?|index\s+terms)', lines[i].strip()):
@@ -448,59 +474,59 @@ class NLPProcessor:
             if re.search(r'\b(REFERENCES|BIBLIOGRAPHY)\b', heading_upper):
                 doc.references = self._parse_references(body)
             else:
-                # Normalize characters early to avoid regex issues
-                body = self._normalize_text(body)
+                new_sec = SectionData(heading=heading_raw)
+                self._extract_media(body, new_sec)
                 
-                # Normalize characters early to avoid regex issues
-                body = self._normalize_text(body)
-                
-                # ── Extract Technical Content from Body ──
-                figures = []
-                tables = []
-                equations = []
+                heading_upper = heading_raw.upper()
+                new_sec.heading = self._normalize_section_heading(heading_raw)
+                doc.sections.append(new_sec)
 
-                # 1. Figures: ![caption](path)
-                # We replace with unique placeholders [[FIG:n]] to keep position
-                def fig_repl(m):
-                    cap, path = m.groups()
-                    final_path = path
-                    if path.startswith('IMG:'):
-                        img_name = path[4:]
-                        final_path = self.image_map.get(img_name, path)
-                    figures.append({'caption': cap, 'path': final_path})
-                    return f" [[FIG:{len(figures)-1}]] "
+    def _extract_media(self, body: str, section: SectionData):
+        """Helper to extract figures, tables, and equations into placeholders within the body."""
+        # Normalize characters early to avoid regex issues
+        body = self._normalize_text(body)
+        
+        figures = []
+        tables = []
+        equations = []
 
-                body = re.sub(r'!\[(.*?)\]\((.*?)\)', fig_repl, body)
+        # 1. Figures: ![caption](path)
+        def fig_repl(m):
+            cap, path = m.groups()
+            final_path = path
+            if path.startswith('IMG:'):
+                img_name = path[4:]
+                final_path = self.image_map.get(img_name, path)
+            figures.append({'caption': cap, 'path': final_path})
+            return f"[[FIG:{len(figures)-1}]]"
 
-                # 2. Tables: [TABLE_START] ... [TABLE_END]
-                def tbl_repl(m):
-                    block = m.group(1)
-                    rows = [r.split(' | ') for r in block.strip().split('\n') if r.strip()]
-                    if rows:
-                        tables.append({'caption': f"Table {len(tables)+1}", 'data': rows})
-                        return f" [[TBL:{len(tables)-1}]] "
-                    return ""
+        body = re.sub(r'!\[(.*?)\]\((.*?)\)', fig_repl, body)
 
-                body = re.sub(r'\[TABLE_START\](.*?)\[TABLE_END\]', tbl_repl, body, flags=re.DOTALL)
+        # 2. Tables: [TABLE_START] ... [TABLE_END]
+        def tbl_repl(m):
+            block = m.group(1)
+            rows = [r.split(' | ') for r in block.strip().split('\n') if r.strip()]
+            if rows:
+                tables.append({'caption': f"Table {len(tables)+1}", 'data': rows})
+                return f"[[TBL:{len(tables)-1}]]"
+            return ""
 
-                # 3. Equations: $$ ... $$
-                def eq_repl(m):
-                    eq_text = m.group(1).strip()
-                    if eq_text:
-                        equations.append({'text': eq_text, 'num': len(equations)+1})
-                        return f" [[EQ:{len(equations)-1}]] "
-                    return ""
+        body = re.sub(r'\[TABLE_START\](.*?)\[TABLE_END\]', tbl_repl, body, flags=re.DOTALL)
 
-                body = re.sub(r'\$\$(.*?)\$\$', eq_repl, body, flags=re.DOTALL)
+        # 3. Equations: $$ ... $$
+        def eq_repl(m):
+            eq_text = m.group(1).strip()
+            if eq_text:
+                equations.append({'text': eq_text, 'num': len(equations)+1})
+                return f"[[EQ:{len(equations)-1}]]"
+            return ""
 
-                normalized = self._normalize_section_heading(heading_raw)
-                doc.sections.append(SectionData(
-                    heading=normalized, 
-                    body=body.strip(),
-                    figures=figures,
-                    tables=tables,
-                    equations=equations
-                ))
+        body = re.sub(r'\$\$(.*?)\$\$', eq_repl, body, flags=re.DOTALL)
+
+        section.body = body.strip()
+        section.figures = figures
+        section.tables = tables
+        section.equations = equations
 
     def _normalize_section_heading(self, heading: str) -> str:
         """
@@ -569,14 +595,45 @@ class NLPProcessor:
     def _extract_authors_from_block(self, block: str) -> List[AuthorInfo]:
         """
         Attempts to parse author block text into AuthorInfo objects.
-        Groups lines into per-author chunks separated by blank lines or email markers.
+        Supports both IEEE (line-by-line) and Springer (superscript numbering) styles.
         """
         authors = []
         if not block.strip():
             return authors
 
-        # Split into potential author chunks by double newline
-        chunks = re.split(r'\n{2,}', block.strip())
+        # DETECT SPRINGER STYLE (numbers/symbols following names in the first non-empty line)
+        non_empty_lines = [l.strip() for l in block.split('\n') if l.strip()]
+        if non_empty_lines:
+            first_line = non_empty_lines[0]
+            if re.search(r'[A-Z][a-z]+.*?\d+[*†]?', first_line):
+                return self._extract_authors_springer(block)
+
+        # DEFAULT IEEE STYLE
+        # Clean block of multiple newlines to standardize before chunking
+        
+        # 1. Clean up default placeholder templates (line 1:, etc.) completely across the block
+        cleaned_block = re.sub(r'(?i)line\s*\d+\s*:\s*(?:\d*(?:st|nd|rd|th)\s*)?', '', block)
+        
+        # 2. Extract Lines and group them into Author blocks based on Email terminating sequences
+        # In Docx parsing, each single text segment usually breaks into a new paragraph, removing double-newlines.
+        chunks = []
+        current_chunk = []
+        
+        lines = [l.strip() for l in cleaned_block.split('\n') if l.strip()]
+        for line in lines:
+            if "given name surname" in line.lower() or "name of organization" in line.lower() or "city, country" in line.lower() or "email address or orcid" in line.lower():
+                continue # Skip dummy data completely
+            
+            current_chunk.append(line)
+            
+            # Predict end of an Author's block based on common terminal fields
+            if self.EMAIL_PATTERN.search(line) or "email address" in line.lower() or "orcid" in line.lower() or "country" in line.lower():
+                chunks.append("\n".join(current_chunk))
+                current_chunk = []
+                
+        # Append leftovers if any
+        if current_chunk:
+            chunks.append("\n".join(current_chunk))
 
         for chunk in chunks:
             lines = [l.strip() for l in chunk.split('\n') if l.strip()]
@@ -584,21 +641,151 @@ class NLPProcessor:
                 continue
 
             a = AuthorInfo()
+            
+            # Assume first line is name if it's not a known label
+            labels = ['address:', 'pin code:', 'pincode:', 'mail id:', 'email:', 'dept', 'department', 
+                      'university', 'college', 'professor', 'scholar', 'institution', 'institute', 'organization']
+            
+            if lines:
+                first_line = lines[0]
+                # If first line contains generic placeholder text, ignore it
+                if "given name surname" in first_line.lower():
+                    lines = lines[1:]
+                    if lines:
+                        a.name = lines[0]
+                        lines = lines[1:]
+                elif not any(kw in first_line.lower() for kw in labels):
+                    a.name = first_line
+                    lines = lines[1:]
+
             for line in lines:
-                if self.EMAIL_PATTERN.search(line):
-                    a.email = self.EMAIL_PATTERN.search(line).group(0)
-                elif any(kw in line.lower() for kw in ['department', 'dept']):
+                lower_line = line.lower()
+                
+                # Email ID
+                if self.EMAIL_PATTERN.search(line) or 'mail id:' in lower_line or 'email:' in lower_line:
+                    email_match = self.EMAIL_PATTERN.search(line)
+                    if email_match:
+                        a.email = email_match.group(0)
+                    elif ':' in line:
+                        a.email = line.split(':', 1)[1].strip()
+                
+                # Author Role
+                elif any(kw in lower_line for kw in ['professor', 'scholar', 'dean', 'lecturer', 'student', 'fellow', 'associate']):
+                    a.role = line
+                
+                # Department
+                elif any(kw in lower_line for kw in ['department', 'dept.']):
                     a.department = line
-                elif any(kw in line.lower() for kw in ['university', 'college', 'institute', 'technology']):
-                    a.institution = line
-                elif any(kw in line.lower() for kw in ['india', 'usa', 'uk', 'city', 'state']):
-                    a.location = line
-                elif not a.name and re.match(r'^[A-Z][a-z]', line):
+                
+                # University
+                elif any(kw in lower_line for kw in ['university', 'simats', 'univ.']):
+                    a.university = line
+                
+                # Institution
+                elif any(kw in lower_line for kw in ['college', 'institute', 'institution', 'technology', 'saveetha']):
+                    if not a.university or 'university' not in lower_line:
+                        a.institution = line
+                
+                # Address
+                elif 'address:' in lower_line:
+                    a.address = line.split(':', 1)[1].strip()
+                elif not a.address and any(kw in lower_line for kw in ['saveetha nagar', 'thandalam', 'chennai']):
+                    a.address = line
+                
+                # Pin Code
+                elif any(kw in lower_line for kw in ['pin code:', 'pincode:']):
+                    a.pincode = re.sub(r'(?i)pincode:|pin code:', '', line).strip()
+                
+                # Catch-all for other details
+                elif not a.name:
                     a.name = line
+                elif not a.address and any(kw in lower_line for kw in ['india', 'usa', 'uk']):
+                    a.address = line
 
             if a.name or a.email or a.institution:
                 authors.append(a)
 
+        return authors
+
+    def _extract_authors_springer(self, block: str) -> List[AuthorInfo]:
+        """Specific parser for Springer 'Author1,2* and Author2,3†' followed by numbered affiliations."""
+        authors = []
+        lines = [l.strip() for l in block.strip().split('\n') if l.strip()]
+        if not lines: return authors
+
+        # 1. Distinguish between Author line(s) and Affiliation lines
+        # Usually authors are in the first 1-2 lines.
+        author_metadata_lines = []
+        aff_lines = []
+        email_lines = []
+        
+        for line in lines:
+            lower_line = line.lower()
+            if re.match(r'^\d+\s+', line):
+                aff_lines.append(line)
+            elif 'email(s):' in lower_line or 'e-mail(s):' in lower_line or 'contributing authors' in lower_line:
+                email_lines.append(line)
+            elif 'contributed equally' in lower_line:
+                pass
+            else:
+                # Potential author name line
+                if re.search(r'[A-Z][a-z]+', line):
+                    author_metadata_lines.append(line)
+
+        # Process Author Names
+        for aline in author_metadata_lines:
+            # Better split for Springer: comma followed by space, or " and "
+            raw_authors = re.split(r',\s+| and ', aline)
+            for ra in raw_authors:
+                ra = ra.strip()
+                if not ra: continue
+                
+                a = AuthorInfo()
+                # Extract name and superscripts - match any name-like part followed by digits/symbols
+                # Correcting regex: (name part) (trailing metadata)
+                match = re.search(r'^(.*?)([\d, *†]+)$', ra)
+                if match:
+                    a.name = match.group(1).strip()
+                    meta = match.group(2)
+                    a.aff_ids = [int(n) for n in re.findall(r'\d+', meta)]
+                    a.is_corresponding = '*' in meta
+                    a.equal_contrib = '†' in meta
+                else:
+                    a.name = ra
+                
+                if a.name and len(a.name) > 1:
+                    authors.append(a)
+
+        # 2. Parse Affiliations
+        aff_dict = {}
+        for line in aff_lines:
+            aff_match = re.match(r'^(\d+)\s+(.*)', line)
+            if aff_match:
+                idx = int(aff_match.group(1))
+                aff_dict[idx] = aff_match.group(2).strip()
+
+        # 3. Parse Emails
+        for line in email_lines:
+            lower_line = line.lower()
+            email_part = line.split(':', 1)[1] if ':' in line else line
+            found_emails = self.EMAIL_PATTERN.findall(email_part)
+            
+            if 'corresponding author(s)' in lower_line or 'e-mail(s):' in lower_line:
+                corr_authors = [au for au in authors if au.is_corresponding]
+                if not corr_authors and authors:
+                    # Fallback if no * was used, assign to first author
+                    corr_authors = [authors[0]]
+                
+                for i, email in enumerate(found_emails):
+                    if i < len(corr_authors):
+                        corr_authors[i].email = email
+            elif 'contributing authors' in lower_line:
+                other_authors = [au for au in authors if not au.is_corresponding]
+                for i, email in enumerate(found_emails):
+                    if i < len(other_authors):
+                        other_authors[i].email = email
+
+        self.last_parsed_affiliations = aff_dict
         return authors
 
     def _parse_references(self, text: str) -> List[str]:

@@ -1,8 +1,8 @@
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import os
-from nlp_processor import NLPProcessor
-from formatter import PDFGenerator, WordGenerator
+from nlp_processor import NLPProcessor, SectionData
+from formatter import PDFGenerator, WordGenerator, SpringerPDFGenerator, SpringerWordGenerator
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
@@ -25,57 +25,120 @@ word_generator = WordGenerator(OUTPUT_FOLDER)
 
 @app.route('/process', methods=['POST'])
 def process_document():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file part'}), 400
-
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
-
     output_format = request.form.get('format', 'pdf').lower()
+    
+    # Custom styling parameters
+    try:
+        style_config = {
+            'titleSize': int(request.form.get('titleSize', 24)),
+            'sectionSize': int(request.form.get('sectionSize', 10)),
+            'subheadingSize': int(request.form.get('subheadingSize', 10)),
+            'bodySize': int(request.form.get('bodySize', 10)),
+            'lineSpacing': float(request.form.get('lineSpacing', 1.0)),
+            'fontFamily': request.form.get('fontFamily', 'Times New Roman')
+        }
+    except (ValueError, TypeError):
+        # Fallback to defaults if parsing fails
+        style_config = {}
 
-    if file:
-        filename   = secure_filename(file.filename)
+    # Template selection (default to ieee)
+    template = request.form.get('template', 'ieee').lower()
+
+    # Initialize generators based on template
+    if template == 'springer':
+        pdf_gen = SpringerPDFGenerator(OUTPUT_FOLDER, style_config)
+        word_gen = SpringerWordGenerator(OUTPUT_FOLDER, style_config)
+        # Mandatory sections for Springer
+        mandatory_headings = [
+            "Introduction", "Methods", "Results", "Discussion", "Conclusion",
+            "Acknowledgements", "Declarations", "Funding", "Conflict of Interest",
+            "Ethics Approval", "Consent to Participate", "Data Availability",
+            "Code Availability", "Author Contributions", "Appendix"
+        ]
+    else:
+        pdf_gen = PDFGenerator(OUTPUT_FOLDER, style_config)
+        word_gen = WordGenerator(OUTPUT_FOLDER, style_config)
+        mandatory_headings = []
+
+    raw_text = None
+    filename = "pasted_text"
+    
+    if 'file' in request.files and request.files['file'].filename != '':
+        file = request.files['file']
+        filename = secure_filename(file.filename)
         input_path = os.path.join(UPLOAD_FOLDER, filename)
         file.save(input_path)
-
-        # 1. Extract raw text
         try:
             raw_text = nlp_processor.extract_text_from_file(input_path)
         except Exception as e:
             return jsonify({'error': f"Failed to read file: {str(e)}"}), 400
+    elif 'text' in request.form and request.form['text'].strip():
+        raw_text = request.form['text']
+        filename = "pasted_text.txt"
+    else:
+        return jsonify({'error': 'No file or text provided'}), 400
 
-        if not raw_text:
-            return jsonify({'error': 'Text extraction failed. File may be empty or unsupported.'}), 400
+    if not raw_text:
+        return jsonify({'error': 'No content to process'}), 400
 
-        # 2. Extract embedded images (best-effort)
-        images = []
-        try:
+    # 2. Extract embedded images (best-effort)
+    images = []
+    try:
+        if 'input_path' in locals():
             images = nlp_processor.extract_images_from_file(input_path, IMAGES_FOLDER)
-        except Exception as e:
-            print(f"[app] Image extraction warning: {e}")
+    except Exception as e:
+        print(f"[app] Image extraction warning: {e}")
 
-        # 3. Parse text into structured DocumentData
-        doc_data = nlp_processor.process_text(raw_text, images=images)
+    # 3. Parse text into structured DocumentData
+    doc_data = nlp_processor.process_text(raw_text, images=images)
 
-        # 4. Generate output document
-        base_name = os.path.splitext(filename)[0]
+    # 4. Mandatory Section Post-processing (Springer Only)
+    if template == 'springer':
+        # Ensure Abstract is always present (usually it is, but just in case)
+        if not any("ABSTRACT" in s.heading.upper() for s in doc_data.sections):
+            doc_data.sections.insert(0, SectionData(heading="Abstract", body="Not Applicable"))
+        
+        # Check other mandatory sections
+        for h in mandatory_headings:
+            if not any(h.upper() in s.heading.upper() for s in doc_data.sections):
+                doc_data.sections.append(SectionData(heading=h, body="Not Applicable"))
+        
+        # Ensure References is handled (likely already in doc_data.references)
 
-        if output_format == 'docx':
-            output_filename = f"formatted_{base_name}.docx"
-            output_path     = word_generator.generate_docx(doc_data, output_filename)
-        else:
-            output_filename = f"formatted_{base_name}.pdf"
-            output_path     = pdf_generator.generate_pdf(doc_data, output_filename)
+    # 5. Generate output document
+    base_name = os.path.splitext(filename)[0]
 
-        return jsonify({
-            'message':        'Processing complete',
-            'download_url':   f'/download/{output_filename}',
-            'title_detected': doc_data.title[:80] if doc_data.title else '(none)',
-            'sections_found': [s.heading for s in doc_data.sections],
-            'authors_found':  len(doc_data.authors),
-            'images_found':   len(images),
-        })
+    if output_format == 'docx':
+        output_filename = f"formatted_{base_name}.docx"
+        output_path     = word_gen.generate_docx(doc_data, output_filename)
+    else:
+        output_filename = f"formatted_{base_name}.pdf"
+        output_path     = pdf_gen.generate_pdf(doc_data, output_filename)
+
+    # Prepare sections list for UI
+    sections_for_ui = []
+    if doc_data.title:
+        sections_for_ui.append("TITLE")
+    if doc_data.authors:
+        sections_for_ui.append("AUTHORS")
+    
+    # Filter out redundant ABSTRACT heading and add other sections
+    other_sections = [s.heading for s in doc_data.sections if s.heading.upper() != "ABSTRACT"]
+    sections_for_ui.extend(other_sections)
+    
+    # Ensure Abstract is in the list if it was processed
+    if any(s.heading.upper() == "ABSTRACT" for s in doc_data.sections):
+        idx = 2 if ("TITLE" in sections_for_ui and "AUTHORS" in sections_for_ui) else (1 if ("TITLE" in sections_for_ui or "AUTHORS" in sections_for_ui) else 0)
+        sections_for_ui.insert(idx, "ABSTRACT")
+
+    return jsonify({
+        'message':        'Processing complete',
+        'download_url':   f'/download/{output_filename}',
+        'title_detected': doc_data.title[:80] if doc_data.title else '(none)',
+        'sections_found': sections_for_ui,
+        'authors_found':  len(doc_data.authors),
+        'images_found':   len(images),
+    })
 
 
 @app.route('/download/<filename>', methods=['GET'])
@@ -90,4 +153,4 @@ def download_file(filename):
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=False, host='0.0.0.0', port=5000)

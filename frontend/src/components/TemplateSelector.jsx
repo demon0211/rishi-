@@ -20,10 +20,10 @@ function TemplateSelector({ selected, onSelect, selectedFormat, onSelectFormat }
                 </select>
             </div>
 
-            <div className="format-selector" style={{ marginTop: '1rem' }}>
+            <div className="format-selector" style={{ marginTop: '1.5rem' }}>
                 <label>Output Format:</label>
-                <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                <div className="format-radio-group">
+                    <label className={`format-radio-label ${selectedFormat === 'pdf' ? 'selected' : ''}`}>
                         <input
                             type="radio"
                             name="format"
@@ -33,7 +33,7 @@ function TemplateSelector({ selected, onSelect, selectedFormat, onSelectFormat }
                         />
                         PDF Document
                     </label>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                    <label className={`format-radio-label ${selectedFormat === 'docx' ? 'selected' : ''}`}>
                         <input
                             type="radio"
                             name="format"
