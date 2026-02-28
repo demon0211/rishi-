@@ -88,26 +88,27 @@ class IEEEAuthorLayoutManager:
         style = self.styles.get('author_block', self.styles.get('body'))
         
         text = ""
-        if author.name: text += f"<b>{html.escape(author.name)}</b><br/>"
-        if author.role: text += f"{html.escape(author.role)}<br/>"
-        if author.department: text += f"{html.escape(author.department)}<br/>"
-        if author.institution: text += f"{html.escape(author.institution)}<br/>"
-        if author.university: text += f"{html.escape(author.university)}<br/>"
+        if author.name: text += f"<i>{html.escape(author.name)}</i><br/>"
+        if author.role: text += f"<i>{html.escape(author.role)}</i><br/>"
+        if author.department: text += f"<i>{html.escape(author.department)}</i><br/>"
+        if author.institution: text += f"<i>{html.escape(author.institution)}</i><br/>"
+        if author.university: text += f"<i>{html.escape(author.university)}</i><br/>"
         
         if author.address:
             addr_text = author.address
             if not addr_text.lower().startswith("address:"):
                 addr_text = f"Address: {addr_text}"
-            text += f"{html.escape(addr_text)}<br/>"
+            text += f"<i>{html.escape(addr_text)}</i><br/>"
             
         if author.pincode:
             pin = author.pincode
             if "pin code:" not in pin.lower() and "pincode:" not in pin.lower():
                 pin = f"Pin code: {pin}"
-            text += f"{html.escape(pin)}<br/>"
+            text += f"<i>{html.escape(pin)}</i><br/>"
             
         if author.email:
-            text += f"Mail ID: {html.escape(author.email)}"
+            # Add Mail ID label on one line, then email wrapped in blue, underlined, italic HTML tags on next line
+            text += f"<i>Mail ID:</i><br/><u><font color='blue'><i>{html.escape(author.email)}</i></font></u>"
             
         if text.endswith("<br/>"): text = text[:-5]
         
@@ -775,12 +776,13 @@ class WordGenerator:
                     
                     if a.name:
                         run = p.add_run(a.name + "\n")
-                        run.bold = True
+                        run.italic = True
                         run.font.name = 'Times New Roman'
                         run.font.size = Pt(10)
                         
                     def add_text(text, new_line=True):
                         r = p.add_run(text + ("\n" if new_line else ""))
+                        r.italic = True
                         r.font.name = 'Times New Roman'
                         r.font.size = Pt(10)
 
@@ -802,7 +804,14 @@ class WordGenerator:
                         add_text(pin)
                         
                     if a.email:
-                        add_text("Mail ID: " + a.email, new_line=False)
+                        add_text("Mail ID: ")
+                        # Format the email on a new line, italic, underlined, and blue
+                        r_email = p.add_run(a.email)
+                        r_email.italic = True
+                        r_email.underline = True
+                        r_email.font.color.rgb = RGBColor(0, 0, 255)
+                        r_email.font.name = 'Times New Roman'
+                        r_email.font.size = Pt(10)
                         
                     # Remove trailing newline if it's the last element and has newline
                     if len(p.runs) > 0 and p.runs[-1].text.endswith("\n"):
